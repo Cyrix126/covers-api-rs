@@ -15,3 +15,4 @@ Compatible with postgresql/sqlite
 ## Code organization
 - [ ] Put caching behind a feature, make uses optional even if compiled with.
 - [ ] separate backend logic into library
+- [ ] add units tests

@@ -1,0 +1,220 @@
+openapi: 3.1.0
+info:
+  title: OpenAPI Description of covers-api API
+  description: 
+    This API will allow to manage covers for products.
+  version: 0.0.1
+paths:
+  /{id}/cover-{size}:
+    get:
+      summary: get the cover of a product product
+      description: 
+        this endpoint will fetch the data from stored files.
+        This request SHOULD be cached. The cache MUST be updated when the data of the database is updated. 
+        The id of product and size of the cover MUST be specified.
+        If the cover does not exist, the default one will be provided for the size requested.
+      parameters: 
+        - name: id
+          in: path
+          description: ID of product from which to get the cover
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: number
+        - name: size
+          in: path
+          description: 
+            size of the cover. Valid values are "min", "small", "origin".
+            Wrong value will default to origin.
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: string
+      responses: 
+        "200":
+          description: The data was found and returned successfully.
+          content:
+            image/webp: {}
+          headers:
+            Cache-Control:
+              description: Cache control header
+              schema:
+                type: string
+                default: max-age=300
+        "404":
+          description: The id of the cover does not exist.
+          headers:
+            Cache-Control:
+              description: Cache control header
+              schema:
+                type: string
+                default: max-age=30
+        "500":
+          description: An error happened on the server side.
+          headers:
+            Cache-Control:
+              description: Cache control header
+              schema:
+                type: string
+                default: max-age=10
+  /cover-default-{size}:
+    get:
+      summary: get the default cover of products
+      description: 
+        this endpoint will fetch the default cover for size requested.
+        This request SHOULD be cached. The cache MUST be updated when the data of the database is updated.
+      parameters: 
+        - name: size
+          in: path
+          description: 
+            size of the cover. Valid values are "min", "small", "origin".
+            Wrong value will default to origin.
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: string
+      responses: 
+        "200":
+          description: The data was found and returned successfully.
+          content:
+            image/webp: {}
+          headers:
+            Cache-Control:
+              description: Cache control header
+              schema:
+                type: string
+                default: max-age=300
+        "500":
+          description: An error happened on the server side.
+          headers:
+            Cache-Control:
+              description: Cache control header
+              schema:
+                type: string
+                default: max-age=10
+  /{id}/retrieve-cover:
+    put:
+      summary: retrieve from configured API the cover for the product.
+      description: 
+        The server will attempt to retrieve the cover for this product id, using the tables of product and API of covers providers. 
+        Will replace the cover if it is already present. 
+        The task can be aborted using the task manager api with id returned.
+      parameters: 
+        - name: id
+          in: path
+          description: 
+            id present in product table
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: number
+      responses: 
+        "202":
+          description: The id exist and the job is started. 
+          headers:
+            Location:
+              description: address of long running tasks manager API
+              schema:
+                type: string
+                default: /api/tasks/12345
+        "404":
+          description: The id does not exist. No job started
+        "500":
+          description: An error happened on the server side. No job started
+  /missing-covers:
+    put:
+      summary: retrieve missing covers of all products.
+      description:
+        The server will attempt to retrieve missing covers for all products that are present in the table product.
+        None will be replaced.
+        The task can be aborted using the task manager api with id returned.
+      responses: 
+        "202":
+          description: The id exist and the job is started. 
+          headers:
+            Location:
+              description: address of long running tasks manager API
+              schema:
+                type: string
+                default: /api/tasks/12345
+        "500":
+          description: An error happened on the server side. No job started.
+    get:
+      summary: retrieve the references and id of products missing a cover
+      description:
+        The server will return a list of reference and id of products missing a cover.
+        Could be used after a request to /covers/retreive-missing.
+        The response is binary encoded with the bitcode crate version 0.6
+      responses: 
+        "200":
+          description: A vec of products (ref,id) without cover is returned.
+          content:
+            content:
+            application/octet-stream: {}
+        "500":
+          description: An error happened on the server side. No job started.
+  /{id}:
+    post:
+      summary: add or replace cover for a product
+      description: use if you want to use a custom cover for a product, without using covers providers api. The cover will automaticcly converted for mini and small size. The file uploaded must be one of the following format (jpeg, png, webp, avif).
+      parameters: 
+        - name: id
+          in: path
+          description: 
+            id present in product table
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: number
+      requestBody:
+        description: The cover image to be uploaded
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+          image/avif:
+            schema:
+              type: string
+              format: binary
+      responses: 
+        "200":
+          description: The new cover is now used.
+        "404":
+          description: The id does not exist.
+        "500":
+          description: An error happened on the server side.
+    delete:
+      summary: remove a cover.
+      description: The cover is deleted from the server, the default cover will be served instead for this product. A new cover could be added with PUT endpoints.
+      parameters: 
+        - name: id
+          in: path
+          description: 
+            id present in product table
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: number
+      responses: 
+        "200":
+          description: The cover has been deleted.
+        "404":
+          description: The id does not exist.
+        "500":
+          description: An error happened on the server side.

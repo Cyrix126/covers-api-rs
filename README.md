@@ -7,6 +7,8 @@ It will fetch on configured providers the image associated with a barcode.
 ## Possible use-case
 Anything that needs covers.  
 For example an ecommerce.
+## Objective
+Priority is to make it work with specific backends. Modularity for other backends will come after.
 ## Installation
 ### Requirements
 - pass binary in PATH

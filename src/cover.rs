@@ -6,7 +6,6 @@ use crate::db::Cover;
 use crate::error::AppError;
 use crate::provider::{try_get_cover, CoverProvider};
 use crate::schema::{self};
-use crate::ClientProduct;
 use anyhow::{anyhow, Context, Result};
 use chrono::{NaiveDateTime, Utc};
 use deadpool_diesel::mysql::{Object, Pool};
@@ -15,7 +14,6 @@ use diesel::{
     dsl::{exists, select},
     prelude::*,
 };
-use doli_client_api_rs::get_barcode_from_id;
 use reqwest::Client;
 /// size of covers
 use strum_macros::EnumIter;
@@ -40,7 +38,7 @@ pub enum CoverSize {
 pub async fn retrieve_cover(
     product_id: u32,
     pool: &Pool,
-    client: &ClientProduct,
+    client: &doli_client_api_rs::Client,
     path_cover: &Path,
     wait_retry: u64,
     // using channel to be task tracker agnostic.
@@ -68,10 +66,8 @@ pub async fn retrieve_cover(
     .await?;
     Ok(())
 }
-async fn get_barcode(client: &ClientProduct, product_id: u32) -> Result<String> {
-    match client {
-        ClientProduct::Dolibarr(c) => Ok(get_barcode_from_id(c, product_id).await?.context("this product does not have barcode. Only products with barcode are supported in this version.")?),
-    }
+async fn get_barcode(client: &doli_client_api_rs::Client, product_id: u32) -> Result<String> {
+    client.get_barcode_from_id(product_id).await?.context("this product does not have barcode. Only products with barcode are supported in this version.")
 }
 /// verify with the cover API DB if conditions are met to retrieve the cover.
 /// In case the id exist in the table, it will check if the id already has an image or if the delay for retrying is expired.

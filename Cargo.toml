@@ -17,7 +17,7 @@ tasks-tracker-client = {git = "https://github.com/Cyrix126/tasks-tracker"}
 doli-client-api-rs = {git = "https://github.com/Cyrix126/doli-client-api-rs"}
 # Cover Provider
 # configuration file
-get_pass = {git = "https://github.com/Cyrix126/get_pass"}
+get_pass = {git = "https://github.com/Cyrix126/get_pass", features=["combine_with_url"]}
 confy = "0.6"
 serde = { version = "1", features = ["derive"] }
 # Server

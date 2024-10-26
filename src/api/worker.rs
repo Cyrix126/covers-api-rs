@@ -1,9 +1,6 @@
-use crate::ClientTask;
 use anyhow::bail;
 use std::{fs::remove_file, path::PathBuf, sync::Arc};
 use strum::IntoEnumIterator;
-use tasks_tracker_client::abort_task;
-use tasks_tracker_client::finish_task;
 
 use axum::{
     body::to_bytes,
@@ -14,9 +11,8 @@ use axum::{
 };
 use deadpool_diesel::mysql::Pool;
 use enclose::enc;
-use get_pass::get_password;
-use reqwest::{header::HOST, Client, StatusCode, Url};
-use tasks_tracker_client::{create_simple_task, update_task_progress, ResponseNewTask};
+use reqwest::{header::HOST, StatusCode, Url};
+use tasks_tracker_client::ResponseNewTask;
 use tokio::{
     spawn,
     sync::mpsc::{self, Receiver},
@@ -24,12 +20,11 @@ use tokio::{
 };
 
 use crate::{
-    config::TaskTrackerApiType,
     cover::{all_id, all_id_missing_retrievable, retrieve_cover, update_table_image, CoverSize},
     error::AppError,
     image::write_cover,
     provider::CoverProvider,
-    AppState, ClientCache, ClientProduct,
+    AppState,
 };
 
 pub async fn retrieve_cover_handle(
@@ -37,35 +32,30 @@ pub async fn retrieve_cover_handle(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     // create a task and return the location for it.
-    match state.config.tasks_api_type {
-        TaskTrackerApiType::TaskTrackerRs(ref p) => {
-            let rep = create_simple_task(
-                client_task(&state.client_task),
-                &state.config.tasks_api_uri.to_url()?,
-                String::from("cover api"),
-                ["retrieve cover for product", &id.to_string()].concat(),
-                &get_password(p).map_err(|_| AppError::Conf)?,
-            )
-            .await
-            .map_err(|_| AppError::Backend)?;
-            // return headers from task tracker
-            let rep = Arc::new(rep);
-            let headers = AppendHeaders([
-                ("Content-Location", rep.location.to_string()),
-                ("ViewToken", rep.view_token.to_owned()),
-            ]);
-            // start the job, update task tracker and cache
-            spawn(enc!((state, rep)async move {
-                wrapper_retrieve_cover(id, state, &rep).await.unwrap();
-            }));
+    let rep = state
+        .client_task
+        .create_simple_task(
+            String::from("cover api"),
+            format!("retrieve cover for product {}", id),
+            None,
+        )
+        .await
+        .map_err(|_| AppError::Backend)?;
+    // return headers from task tracker
+    let rep = Arc::new(rep);
+    let headers = AppendHeaders([
+        ("Content-Location", rep.location.to_string()),
+        ("ViewToken", rep.view_token.to_owned()),
+    ]);
+    // start the job, update task tracker and cache
+    spawn(enc!((state, rep)async move {
+        wrapper_retrieve_cover(id, state, &rep).await.unwrap();
+    }));
 
-            // the task began and token to review it is given back.
-            // the token to abort it is not given since the result of the task should be fast.
-            Ok((StatusCode::ACCEPTED, headers))
-            // if the task api is misconfigured, the server return an internal server error.
-        }
-    }
-    // spawn the task that will update the task.
+    // the task began and token to review it is given back.
+    // the token to abort it is not given since the result of the task should be fast.
+    Ok((StatusCode::ACCEPTED, headers))
+    // if the task api is misconfigured, the server return an internal server error.
 }
 
 async fn wrapper_retrieve_cover(
@@ -92,7 +82,7 @@ async fn wrapper_retrieve_cover(
     // update task tracker
     let handle = spawn(enc!((state) async move {
         manage_tracker_status(
-            &state.client_task,
+            state.client_task,
             &location,
             token_update,
             receive_progress,
@@ -102,9 +92,7 @@ async fn wrapper_retrieve_cover(
     }));
     // update cache once the job is finished.
     if handle.await.is_ok() {
-        update_cache_cover(&state, id)
-            .await
-            .map_err(|_| AppError::Backend)?;
+        update_cache_cover(&state, id).await?
     }
     Ok(())
 }
@@ -114,39 +102,31 @@ pub async fn retrieve_missing_covers(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     // create a task and return the location for it.
-    match state.config.tasks_api_type {
-        TaskTrackerApiType::TaskTrackerRs(ref p) => {
-            let rep = create_simple_task(
-                client_task(&state.client_task),
-                &state
-                    .config
-                    .tasks_api_uri
-                    .to_url()
-                    .map_err(|_| AppError::Conf)?,
-                String::from("cover api"),
-                "retrieve missing covers".to_string(),
-                &get_password(p).map_err(|_| AppError::Conf)?,
-            )
-            .await
-            .map_err(|_| AppError::Backend)?;
+    let rep = state
+        .client_task
+        .create_simple_task(
+            String::from("cover api"),
+            "retrieve missing covers".to_string(),
+            None,
+        )
+        .await
+        .map_err(|_| AppError::Backend)?;
 
-            // return headers from task tracker
-            let rep = Arc::new(rep);
-            let headers = AppendHeaders([
-                ("Content-Location", rep.location.as_str()),
-                ("ViewToken", &rep.view_token),
-            ]);
-            // start the job, update task tracker and cache
-            // errors will be for the task tracker
-            spawn(enc!((state, rep)async move {
-                wrapper_retrieve_missing_covers(state, &rep).await.unwrap();
-            }));
+    // return headers from task tracker
+    let rep = Arc::new(rep);
+    let headers = AppendHeaders([
+        ("Content-Location", rep.location.as_str()),
+        ("ViewToken", &rep.view_token),
+    ]);
+    // start the job, update task tracker and cache
+    // errors will be for the task tracker
+    spawn(enc!((state, rep)async move {
+        wrapper_retrieve_missing_covers(state, &rep).await.unwrap();
+    }));
 
-            // the task began and token to review it is given back.
-            // the token to abort it is not given since the result of the task should be fast.
-            Ok((StatusCode::ACCEPTED, headers).into_response())
-        }
-    }
+    // the task began and token to review it is given back.
+    // the token to abort it is not given since the result of the task should be fast.
+    Ok((StatusCode::ACCEPTED, headers).into_response())
 }
 async fn wrapper_retrieve_missing_covers(
     state: AppState,
@@ -200,7 +180,7 @@ async fn wrapper_retrieve_missing_covers(
     let token_update = rep.update_token.clone();
     // update task tracker
     manage_tracker_status(
-        &state.client_task,
+        state.client_task,
         &location,
         token_update,
         receive_progress,
@@ -213,23 +193,19 @@ async fn wrapper_retrieve_missing_covers(
 
 async fn get_missing_id(
     conn_db_cover: &Pool,
-    client_product: &ClientProduct,
+    client_product: &doli_client_api_rs::Client,
     wait_try: u64,
 ) -> anyhow::Result<Vec<u32>> {
-    match client_product {
-        ClientProduct::Dolibarr(c) => {
-            // get all products id
-            let mut products = doli_client_api_rs::get_all_products(c).await?;
-            // get all products id already in cover table
-            let conn = conn_db_cover.get().await?;
-            let products_in_table_cover = all_id(&conn).await?;
-            products.retain(|id| !products_in_table_cover.contains(id));
-            // add ids that are present in table but missing covers that can be retrieved.
-            let id_covers_missing_retrievable = all_id_missing_retrievable(&conn, wait_try).await?;
-            products.extend(id_covers_missing_retrievable);
-            Ok(products)
-        }
-    }
+    // get all products id
+    let mut products = client_product.get_all_products().await?;
+    // get all products id already in cover table
+    let conn = conn_db_cover.get().await?;
+    let products_in_table_cover = all_id(&conn).await?;
+    products.retain(|id| !products_in_table_cover.contains(id));
+    // add ids that are present in table but missing covers that can be retrieved.
+    let id_covers_missing_retrievable = all_id_missing_retrievable(&conn, wait_try).await?;
+    products.extend(id_covers_missing_retrievable);
+    Ok(products)
 }
 
 /// get the ids of every missing covers.
@@ -254,38 +230,30 @@ pub async fn add_manual_cover(
     // check if format compatible
     // task
     // create a task and return the location for it.
-    match state.config.tasks_api_type {
-        TaskTrackerApiType::TaskTrackerRs(ref p) => {
-            let rep = create_simple_task(
-                client_task(&state.client_task),
-                &state
-                    .config
-                    .tasks_api_uri
-                    .to_url()
-                    .map_err(|_| AppError::Conf)?,
-                String::from("cover api"),
-                ["add manual cover for product", &id.to_string()].concat(),
-                &get_password(p).map_err(|_| AppError::Conf)?,
-            )
-            .await
-            .map_err(|_| AppError::Backend)?;
+    let rep = state
+        .client_task
+        .create_simple_task(
+            String::from("cover api"),
+            format!("add manual cover for product {} ", id),
+            None,
+        )
+        .await
+        .map_err(|_| AppError::Backend)?;
 
-            // return headers from task tracker
-            let rep = Arc::new(rep);
-            let headers = AppendHeaders([
-                ("Content-Location", rep.location.as_str()),
-                ("ViewToken", &rep.view_token),
-            ]);
-            // start the job, update task tracker and cache
-            spawn(enc!((state, rep)async move {
-                wrapper_add_manual_cover(id, state, &rep, request).await.unwrap();
-            }));
+    // return headers from task tracker
+    let rep = Arc::new(rep);
+    let headers = AppendHeaders([
+        ("Content-Location", rep.location.as_str()),
+        ("ViewToken", &rep.view_token),
+    ]);
+    // start the job, update task tracker and cache
+    spawn(enc!((state, rep)async move {
+        wrapper_add_manual_cover(id, state, &rep, request).await.unwrap();
+    }));
 
-            // the task began and token to review it is given back.
-            // the token to abort it is not given since the result of the task should be fast.
-            Ok((StatusCode::ACCEPTED, headers).into_response())
-        }
-    }
+    // the task began and token to review it is given back.
+    // the token to abort it is not given since the result of the task should be fast.
+    Ok((StatusCode::ACCEPTED, headers).into_response())
 }
 
 async fn wrapper_add_manual_cover(
@@ -311,7 +279,7 @@ async fn wrapper_add_manual_cover(
     // update task tracker
     let handle = spawn(enc!((state) async move {
         manage_tracker_status(
-            &state.client_task,
+            state.client_task,
             &location,
             token_update,
             receive_progress,
@@ -349,41 +317,28 @@ fn delete_cover_files(id: u32, mut path: PathBuf) -> Result<(), std::io::Error> 
     Ok(())
 }
 async fn update_cache_cover(state: &AppState, id: u32) -> Result<(), AppError> {
-    match state.config.cache_api_type {
-        crate::config::CacheApiType::Mnemosyne => {
-            // delete entry per path
-            // path API cache
-            let uri = state
-                .config
-                .cache_api_uri
-                .to_url()
-                .map_err(|_| AppError::Conf)?;
-            // path cover API
-            for variant in CoverSize::iter() {
-                let url = format!("{uri}/api/1/cache/path/{id}/cover-{variant}");
-                let host = &state.config.hostname;
-                let ClientCache::CachingProxy(ref client) = state.client_cache;
-                client
-                    .delete(url)
-                    .header(
-                        HOST,
-                        HeaderValue::from_str(host).map_err(|_| AppError::Host)?,
-                    )
-                    .send()
-                    .await
-                    .map_err(|_| AppError::Backend)?;
-            }
-        }
+    // delete entry per path
+    // path API cache
+    let uri = state.config.cache_api_uri.clone();
+    // path cover API
+    for variant in CoverSize::iter() {
+        let url = format!("{uri}/api/1/cache/path/{id}/cover-{variant}");
+        let host = &state.config.hostname;
+        state
+            .client_cache
+            .delete(url)
+            .header(
+                HOST,
+                HeaderValue::from_str(host).map_err(|_| AppError::Host)?,
+            )
+            .send()
+            .await
+            .map_err(|_| AppError::Backend)?;
     }
     Ok(())
 }
-fn client_task(client: &ClientTask) -> &Client {
-    match client {
-        ClientTask::TasksTracker(c) => c,
-    }
-}
 async fn manage_tracker_status(
-    client: &ClientTask,
+    client: tasks_tracker_client::Client,
     task_location: &Url,
     token_update: String,
     mut receiver: Receiver<u8>,
@@ -396,7 +351,7 @@ async fn manage_tracker_status(
     spawn(enc!((client, task_location, token_update) async move {
         loop {
             if let Some(prog) = receiver.recv().await {
-                update_task_progress(client_task(&client), &task_location, &token_update, prog)
+                client.update_task_progress(&task_location, prog, Some(&token_update))
                     .await.map_err(|_|AppError::Backend)?;
             } else {
                 return Ok::<(), AppError>(());
@@ -407,16 +362,18 @@ async fn manage_tracker_status(
     // check if the job is finished. If error, put status aborted on task tracker with error description.
     // if ok, status finish
     if let Err(err) = handler.await {
-        abort_task(
-            client_task(client),
-            task_location,
-            &token_update,
-            Some(&err.to_string()),
-            &[],
-        )
-        .await?;
+        client
+            .abort_task(
+                task_location,
+                Some(&err.to_string()),
+                &[],
+                Some(&token_update),
+            )
+            .await?;
         bail!("task had an issue and was aborted");
     }
-    finish_task(client_task(client), task_location, &token_update, None, &[]).await?;
+    client
+        .finish_task(task_location, None, &[], Some(&token_update))
+        .await?;
     Ok(())
 }

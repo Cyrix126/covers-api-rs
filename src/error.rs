@@ -16,9 +16,6 @@ pub enum AppError {
     #[error("invalid value for HOST header")]
     #[status(StatusCode::BAD_REQUEST)]
     Host,
-    #[error("Misconfigured cover API on server side")]
-    #[status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)]
-    Conf,
     #[error("Backend required for cover API failed")]
     #[status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)]
     Backend,
@@ -32,7 +29,6 @@ impl AppError {
     pub fn transmit_error(self, error_msg: &impl Display) -> Self {
         error!("{error_msg}");
         match self {
-            Self::Conf => warn!("check configuration file"),
             Self::Backend => warn!("a backend service seems to be unjoinable"),
             Self::FileNotFound(_) => warn!("a file requested does not exist"),
             Self::Db(_) => warn!("a database was unjoinable"),

@@ -8,17 +8,10 @@ use axum::routing::get;
 use axum::routing::post;
 use axum::routing::put;
 use axum::Router;
-use config::CacheApiType;
-use config::ProductApiType;
-use config::TaskTrackerApiType;
 use deadpool_diesel::mysql::Manager;
 use deadpool_diesel::mysql::Pool;
-use doli_client_api_rs::client_doli;
-use doli_client_api_rs::Client as ClientDoli;
-use error::AppError;
-use get_pass::get_password;
+use get_pass::url::add_pass_to_url;
 use reqwest::Client;
-use reqwest::Url;
 use std::error::Error;
 use tracing::info;
 
@@ -36,44 +29,6 @@ mod image;
 /// method to get cover from provider
 mod provider;
 mod schema;
-/// different type of client for each different type of tasks tracker API supported
-#[derive(Clone)]
-enum ClientTask {
-    TasksTracker(Client),
-}
-
-/// different type of client for each different type of tasks product API supported
-#[derive(Clone)]
-enum ClientProduct {
-    Dolibarr(ClientDoli),
-}
-/// different type of client for each different type of tasks product API supported
-#[derive(Clone)]
-enum ClientCache {
-    CachingProxy(Client),
-}
-
-fn api_task_type_to_client(api_type_task: &TaskTrackerApiType) -> ClientTask {
-    match api_type_task {
-        TaskTrackerApiType::TaskTrackerRs(_) => ClientTask::TasksTracker(Client::new()),
-    }
-}
-fn api_cache_type_to_client(api_type_cache: &CacheApiType) -> ClientCache {
-    match api_type_cache {
-        CacheApiType::Mnemosyne => ClientCache::CachingProxy(Client::new()),
-    }
-}
-fn api_product_type_to_client(
-    api_type_product: &ProductApiType,
-    url: Url,
-) -> Result<ClientProduct> {
-    match api_type_product {
-        ProductApiType::Dolibarr(path_token_api) => Ok(ClientProduct::Dolibarr(client_doli(
-            &get_password(path_token_api).map_err(|_| AppError::Conf)?,
-            url,
-        ))),
-    }
-}
 
 #[derive(Clone)]
 struct AppState {
@@ -81,9 +36,9 @@ struct AppState {
     // connection to the cover api database
     conn_db_cover: Pool,
     // client to request external API
-    client_task: ClientTask,
-    client_product: ClientProduct,
-    client_cache: ClientCache,
+    client_task: tasks_tracker_client::Client,
+    client_product: doli_client_api_rs::Client,
+    client_cache: Client,
 }
 
 #[tokio::main]
@@ -95,22 +50,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // construct the url of database connection.
     info!("connection to the DB");
+    let mut uri_cover_db = config.cover_db_uri.clone();
+    add_pass_to_url(&mut uri_cover_db, &config.cover_db_path_pass)?;
     let pool_cover = Pool::builder(Manager::new(
-        config.cover_db_uri.to_url()?.as_str(),
+        uri_cover_db.as_str(),
         deadpool_diesel::Runtime::Tokio1,
     ))
     .build()
     .expect("Could not connect to Cover DB");
 
     // state that Axum will keep
-    let client_product =
-        api_product_type_to_client(&config.product_api_type, config.product_api_uri.to_url()?)?;
-    let client_cache = api_cache_type_to_client(&config.cache_api_type);
-    let client_task = api_task_type_to_client(&config.tasks_api_type);
+
+    // construct clients for cache, tasks and product API
+
+    // product API
+    let mut uri_product_api = config.product_api_uri.clone();
+    add_pass_to_url(&mut uri_product_api, &config.product_api_path_pass)?;
+    let client_product = doli_client_api_rs::Client::new(uri_product_api)?;
+
+    // Tasks tracker API
+    let mut uri_tasks_tracker_api = config.tasks_api_uri.clone();
+    add_pass_to_url(&mut uri_tasks_tracker_api, &config.tasks_api_pass_path)?;
+    let client_tasks_tracker = tasks_tracker_client::Client::new(uri_tasks_tracker_api)?;
+
+    // Cache API (simple Client)
+    let client_cache = reqwest::Client::new();
+
     let state = AppState {
         config,
         conn_db_cover: pool_cover,
-        client_task,
+        client_task: client_tasks_tracker,
         client_product,
         client_cache,
     };
